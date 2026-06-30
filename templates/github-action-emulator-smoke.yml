@@ -1,0 +1,70 @@
+# EMulator Studio — CI smoke test (Strategy C: repo-native).
+#
+# Copy this file into your APP repo at .github/workflows/emulator-smoke.yml.
+# On every push it builds the app, boots a real Android emulator in CI, launches
+# the app, captures a screenshot + logcat, renders a Markdown report and commits
+# it to emulator-reports/. Replace <pkg> with your applicationId.
+#
+# Requirements: an Android Gradle project. For iOS, swap to a macos-latest runner
+# and xcodebuild + xcrun simctl (see TOOLING_REFERENCE in the design docs).
+
+name: emulator-smoke
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Run on emulator + capture
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell monkey -p <pkg> -c android.intent.category.LAUNCHER 1 || true
+            sleep 8
+            mkdir -p emulator-reports/ci
+            adb exec-out screencap -p > emulator-reports/ci/shot.png
+            adb logcat -d -v time > emulator-reports/ci/logcat.txt
+
+      - name: Render Markdown report
+        run: |
+          {
+            echo "# EMulator Studio — CI smoke report"
+            echo
+            echo "> $(date -u) · android-emulator-runner · api-level 34"
+            echo
+            echo "## Errors & warnings"
+            echo
+            echo '```log'
+            grep -E ' [EWF]/' emulator-reports/ci/logcat.txt | head -200 || echo "none"
+            echo '```'
+            echo
+            echo "## Screenshot"
+            echo
+            echo "![device](shot.png)"
+          } > emulator-reports/ci/report.md
+
+      - name: Commit report
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore: emulator smoke report'
+          file_pattern: 'emulator-reports/**'
